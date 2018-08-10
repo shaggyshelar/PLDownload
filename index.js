@@ -1,3 +1,4 @@
+var ProgressBar = require("progress");
 var Nightmare = require("nightmare");
 var nightmare = Nightmare({ show: false });
 const filenamify = require("filenamify");
@@ -7,7 +8,7 @@ var fs = require("fs");
 /*** CONFIGURATION ***/
 
 // Link to the table of contents of the course you want
-var target = "https://app.pluralsight.com/library/courses/rapid-es6-training/table-of-contents";
+var target = "https://app.pluralsight.com/library/courses/bitcoin-decentralized-technology";
 
 // Your login details
 var user = {
@@ -15,7 +16,7 @@ var user = {
   password: "PASSWORD"
 };
 
-var delayBeetwenTwoVideos = 15000;
+var delayBeetwenTwoVideos = 10000;
 
 function LogMessage(message) {
     var datetime = new Date();
@@ -25,8 +26,13 @@ function LogMessage(message) {
 
 LogMessage("Starting download");
 
-var numberOfFiles,  completed,  saveTo;
 
+LogMessage("Logging in...");
+
+var numberOfFiles,
+  completed,
+  saveTo,
+  progress = 0;
 nightmare
   .goto("https://app.pluralsight.com/id/")
   .insert("#Username", user.email)
@@ -62,14 +68,31 @@ nightmare
     LogMessage(
       `Downloading "${saveTo}" from PluralSight, ${numberOfFiles} videos`
     );
+    progress = new ProgressBar(":current/:total [:bar] :percent :etas", {
+      total: numberOfFiles,
+      callback: terminate
+    });
     var tasks = module.courses.map((course, index) => callback => {
       scrape(course, index, callback);
     });
-    require("async.parallellimit")(tasks, 1, function() {});
+    require("async.parallellimit")(tasks, 1, function() {
+        LogMessage("All Tasks Completed");
+    });
   })
   .catch(e => console.log(e));
 
 function scrape(course, index, callback, delay = 1500) {
+    var validFolderPath = filenamify(saveTo);
+    var validFilePath = "videos/" + validFolderPath + "/" + (index + 1) + ". " + filenamify(course.name.replace("/", "")) + ".webm";
+    if (
+      fs.existsSync(validFilePath)
+    ) {
+      LogMessage("File Exists: " + validFilePath );
+      callback();
+      return;
+    }
+
+
   nightmare
     .goto(course.url)
     .wait("video")
@@ -80,13 +103,13 @@ function scrape(course, index, callback, delay = 1500) {
     })
     .then(result => {
       if (!result) {
+        progress.interrupt("Something went wrong. Retrying...");
         scrape(course, index, callback, delay + 500);
         return;
       }
 
       course.src = result;
       saveVideo(course, index + 1, callback);
-      //callback();
     })
     .catch(e => {
       console.log("Error 1", e);
@@ -98,20 +121,24 @@ function saveVideo(course, number, callback) {
   if (!fs.existsSync("videos/")) {
     fs.mkdirSync("videos/");
   }
-  if (!fs.existsSync("videos/" + saveTo)) {
-    fs.mkdirSync("videos/" + saveTo);
+  var validFolderPath = filenamify(saveTo);
+  if (!fs.existsSync("videos/" + validFolderPath)) {
+    fs.mkdirSync("videos/" + validFolderPath);
   }
-  var validFilePath = "videos/" + saveTo + "/" + number + ". " + filenamify(course.name.replace("/", "")) + ".webm";
+  var validFilePath = "videos/" + validFolderPath + "/" + number + ". " + filenamify(course.name.replace("/", "")) + ".webm";
   if (
     fs.existsSync(validFilePath)
   ) {
+    LogMessage("File Exists: " + validFilePath );
+    callback();
     return;
   }
   setTimeout(function() {
     var file = fs.createWriteStream(validFilePath);
     var urlToDownload = course.src.replace("https", "http");
-    http
+    var request = http
       .get(urlToDownload, response => {
+        progress.tick();
         response.pipe(file);
         response.on("end", () => {
           completed++;
@@ -123,6 +150,12 @@ function saveVideo(course, number, callback) {
       })
       .on("error", e => {
         console.error(`Got error: ${e.message}`);
+        callback();
       });
   }, delayBeetwenTwoVideos);
+}
+
+function terminate() {
+    LogMessage("Operation Completed!");
+  process.exit(0);
 }
